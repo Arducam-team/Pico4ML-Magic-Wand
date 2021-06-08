@@ -160,22 +160,27 @@ int main() {
       // Rasterize the gesture
       RasterizeStroke(stroke_points, *stroke_transmit_length, 0.6f, 0.6f,
                       raster_width, raster_height, raster_buffer);
+      auto *   displayBuf = new uint8_t[96 * 96 * 2];
+      uint16_t index      = 0;
       for (int y = 0; y < raster_height; ++y) {
         char line[raster_width + 1];
         for (int x = 0; x < raster_width; ++x) {
           const int8_t *pixel =
-              &raster_buffer[(y * raster_width * raster_channels) +
-                             (x * raster_channels)];
-          const int8_t red = pixel[0];
-          const int8_t green = pixel[1];
-          const int8_t blue = pixel[2];
-          char output;
+              &raster_buffer[(y * raster_width * raster_channels) + (x * raster_channels)];
+          const int8_t red    = pixel[0];
+          const int8_t green  = pixel[1];
+          const int8_t blue   = pixel[2];
+          char         output = '.';
+          // default green
+          uint16_t imageRGB = ST7735_COLOR565(0, 255, 0);
           if ((red > -128) || (green > -128) || (blue > -128)) {
             output = '#';
-          } else {
-            output = '.';
+            // black
+            imageRGB = ST7735_COLOR565(0, 0, 0);
           }
-          line[x] = output;
+          line[x]             = output;
+          displayBuf[index++] = (uint8_t)(imageRGB >> 8) & 0xFF;
+          displayBuf[index++] = (uint8_t)(imageRGB)&0xFF;
         }
         line[raster_width] = 0;
         ei_printf("%s\n", line);
@@ -221,12 +226,13 @@ int main() {
       }
       ei_printf("\nFound %s (%0.2f)\n",max_index,max_score*100);
       char str[10];
-      sprintf(str, "%d%%", (int )(max_score*100));
+      sprintf(str, "%s:%d%%",max_index, (int )(max_score*100));
 
       ST7735_FillRectangle(0, 90, ST7735_WIDTH, 160 - 90, ST7735_GREEN);
-      ST7735_WriteString(35, 100, max_index, Font_11x18, ST7735_BLACK,
-                         ST7735_GREEN);
-      ST7735_WriteString(25, 130, str, Font_11x18, ST7735_BLACK, ST7735_GREEN);
+      ST7735_FillRectangle(23, 90, 34, 34, ST7735_BLACK);
+      ST7735_DrawImage(24, 91, 32, 32, displayBuf);
+
+      ST7735_WriteString(15, 130, str, Font_11x18, ST7735_BLACK, ST7735_GREEN);
 
 
 #if EI_CLASSIFIER_HAS_ANOMALY == 1
