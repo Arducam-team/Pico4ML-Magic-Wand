@@ -1,7 +1,10 @@
 #ifndef MAGIC_WAND_IMU_PROVIDER_H
 #define MAGIC_WAND_IMU_PROVIDER_H
 #include <ICM20948.h>
+#include "ICM42622.h"
+#include "hardware/gpio.h"
 IMU_EN_SENSOR_TYPE enMotionSensorType;
+uint8_t DeviceWho=0;
 
 namespace {
 
@@ -54,14 +57,36 @@ enum {
 };
 
 void SetupIMU() {
-  ICM20948::imuInit(&enMotionSensorType);
-
-  // Make sure we are pulling measurements into a FIFO.
-  // If you see an error on this line, make sure you have at least v1.1.0 of the
-  // Arduino_LSM9DS1 library installed.
-  //  ICM20948::setContinuousMode();
-  acceleration_sample_rate = 1125.0 / (1 + 8); // 119.0f;
-  gyroscope_sample_rate = 1100.0 / (1 + 8);    // 119.0f;
+  uint8_t flag=0;
+  i2c_init(I2C_PORT, 400 * 1000);
+  gpio_set_function(4, GPIO_FUNC_I2C);
+  gpio_set_function(5, GPIO_FUNC_I2C);
+  gpio_pull_up(4);
+  gpio_pull_up(5);
+  sleep_ms(1000);
+  uint8_t DeviceID=ICM42622::Icm42622CheckID();
+  if(DeviceID==ICM42622_DEVICE_ID)
+  {
+    DeviceWho=ICM42622_DEVICE;
+    flag=ICM42622::Icm42622Init();
+    if (flag==0) 
+    {
+      return ;
+    }
+    acceleration_sample_rate = 100; 
+    gyroscope_sample_rate    = 100; 
+  }
+  else 
+  {
+    DeviceWho=ICM20948_DEVICE;
+    ICM20948::imuInit(&enMotionSensorType);
+    if (IMU_EN_SENSOR_TYPE_ICM20948 != enMotionSensorType) 
+    {
+      return ;
+    }
+    acceleration_sample_rate = 1125.0f / (8 + 1);; 
+    gyroscope_sample_rate    = 1125.0f / (8 + 1);; 
+  }
   ei_printf("Magic starts!\n");
 
 }
@@ -70,64 +95,124 @@ void ReadAccelerometerAndGyroscope(int *new_accelerometer_samples,
                                    int *new_gyroscope_samples) {
   // Keep track of whether we stored any new data
   *new_accelerometer_samples = 0;
-  *new_gyroscope_samples = 0;
+  *new_gyroscope_samples     = 0;
   // Loop through new samples and add to buffer
-  while (ICM20948::dataReady()) {
-    const int gyroscope_index = (gyroscope_data_index % gyroscope_data_length);
-    gyroscope_data_index += 3;
-    float *current_gyroscope_data = &gyroscope_data[gyroscope_index];
-    float *current_gyroscope_data_tmp = &gyroscope_data_tmp[gyroscope_index];
+  if (DeviceWho==ICM42622_DEVICE)
+  {
+      while (ICM42622::Icm42622DataReady()) {
+      const int gyroscope_index = (gyroscope_data_index % gyroscope_data_length);
+      gyroscope_data_index += 3;
+      float *current_gyroscope_data     = &gyroscope_data[gyroscope_index];
+      float *current_gyroscope_data_tmp = &gyroscope_data_tmp[gyroscope_index];
 
-    // Write samples into the buffer and
-    // rotate the axis order to be compatible with the model
-    // (compared to the Arduino Nano BLE Sense,
-    // the sensor orientation on the Pico4ML is different).
-    // The expected direction of the Pico4ML on the wand is that
-    // the USB port faces the user's hand and
-    // the screen faces the user's face:
-    //                  ____
-    //                 |    |<- Pico4ML board
-    //                 | -- |
-    //                 ||  ||  <- Screen
-    //                 | -- |
-    //                 |    |
-    //                  -TT-   <- USB port
-    //                   ||
-    //                   ||<- Wand
-    //                  ....
-    //                   ||
-    //                   ||
-    //                   ()
-    //
+      // Write samples into the buffer and
+      // rotate the axis order to be compatible with the model
+      // (compared to the Arduino Nano BLE Sense,
+      // the sensor orientation on the Pico4ML is different).
+      // The expected direction of the Pico4ML on the wand is that
+      // the USB port faces the user's hand and
+      // the screen faces the user's face:
+      //                  ____
+      //                 |    |<- Pico4ML board
+      //                 | -- |
+      //                 ||  ||  <- Screen
+      //                 | -- |
+      //                 |    |
+      //                  -TT-   <- USB port
+      //                   ||
+      //                   ||<- Wand
+      //                  ....
+      //                   ||
+      //                   ||
+      //                   ()
+      //
 
-    if (!ICM20948::icm20948GyroRead(&current_gyroscope_data_tmp[0],
-                                    &current_gyroscope_data_tmp[1],
-                                    &current_gyroscope_data_tmp[2])) {
-      ei_printf("Failed to read gyroscope data");
-      break;
+      if (!ICM42622::Icm42622ReadGyro(&current_gyroscope_data_tmp[0],
+                                      &current_gyroscope_data_tmp[1],
+                                      &current_gyroscope_data_tmp[2])) {
+        printf("Failed to read gyroscope data");
+        break;
+      }
+      current_gyroscope_data[0] = -current_gyroscope_data_tmp[1];
+      current_gyroscope_data[1] = -current_gyroscope_data_tmp[0];
+      current_gyroscope_data[2] = current_gyroscope_data_tmp[2];
+      *new_gyroscope_samples += 1;
+
+      const int acceleration_index = (acceleration_data_index % acceleration_data_length);
+      acceleration_data_index += 3;
+      float *current_acceleration_data     = &acceleration_data[acceleration_index];
+      float *current_acceleration_data_tmp = &acceleration_data_tmp[acceleration_index];
+      // Read each sample, removing it from the device's FIFO buffer
+      if (!ICM42622::Icm42622ReadAccel(&current_acceleration_data_tmp[0],
+                                      &current_acceleration_data_tmp[1],
+                                      &current_acceleration_data_tmp[2])) {
+        printf("Failed to read acceleration data");
+        break;
+      }
+      current_acceleration_data[0] = -current_acceleration_data_tmp[1];
+      current_acceleration_data[1] = -current_acceleration_data_tmp[0];
+      current_acceleration_data[2] = current_acceleration_data_tmp[2];
+      *new_accelerometer_samples += 1;
+      ICM42622::Icm42622DataReady();
     }
-    current_gyroscope_data[0] = -current_gyroscope_data_tmp[1];
-    current_gyroscope_data[1] = -current_gyroscope_data_tmp[0];
-    current_gyroscope_data[2] = current_gyroscope_data_tmp[2];
-    *new_gyroscope_samples += 1;
+  }
+  else
+  {
+      while (ICM20948::dataReady()) {
+      const int gyroscope_index = (gyroscope_data_index % gyroscope_data_length);
+      gyroscope_data_index += 3;
+      float *current_gyroscope_data     = &gyroscope_data[gyroscope_index];
+      float *current_gyroscope_data_tmp = &gyroscope_data_tmp[gyroscope_index];
 
-    const int acceleration_index =
-        (acceleration_data_index % acceleration_data_length);
-    acceleration_data_index += 3;
-    float *current_acceleration_data = &acceleration_data[acceleration_index];
-    float *current_acceleration_data_tmp =
-        &acceleration_data_tmp[acceleration_index];
-    // Read each sample, removing it from the device's FIFO buffer
-    if (!ICM20948::icm20948AccelRead(&current_acceleration_data_tmp[0],
-                                     &current_acceleration_data_tmp[1],
-                                     &current_acceleration_data_tmp[2])) {
-      ei_printf("Failed to read acceleration data");
-      break;
-    }
-    current_acceleration_data[0] = -current_acceleration_data_tmp[1];
-    current_acceleration_data[1] = -current_acceleration_data_tmp[0];
-    current_acceleration_data[2] = current_acceleration_data_tmp[2];
-    *new_accelerometer_samples += 1;
+      // Write samples into the buffer and
+      // rotate the axis order to be compatible with the model
+      // (compared to the Arduino Nano BLE Sense,
+      // the sensor orientation on the Pico4ML is different).
+      // The expected direction of the Pico4ML on the wand is that
+      // the USB port faces the user's hand and
+      // the screen faces the user's face:
+      //                  ____
+      //                 |    |<- Pico4ML board
+      //                 | -- |
+      //                 ||  ||  <- Screen
+      //                 | -- |
+      //                 |    |
+      //                  -TT-   <- USB port
+      //                   ||
+      //                   ||<- Wand
+      //                  ....
+      //                   ||
+      //                   ||
+      //                   ()
+      //
+
+      if (!ICM20948::icm20948GyroRead(&current_gyroscope_data_tmp[0],
+                                      &current_gyroscope_data_tmp[1],
+                                      &current_gyroscope_data_tmp[2])) {
+        printf("Failed to read gyroscope data");
+        break;
+      }
+      current_gyroscope_data[0] = -current_gyroscope_data_tmp[1];
+      current_gyroscope_data[1] = -current_gyroscope_data_tmp[0];
+      current_gyroscope_data[2] = current_gyroscope_data_tmp[2];
+      *new_gyroscope_samples += 1;
+
+      const int acceleration_index = (acceleration_data_index % acceleration_data_length);
+      acceleration_data_index += 3;
+      float *current_acceleration_data     = &acceleration_data[acceleration_index];
+      float *current_acceleration_data_tmp = &acceleration_data_tmp[acceleration_index];
+      // Read each sample, removing it from the device's FIFO buffer
+      if (!ICM20948::icm20948AccelRead(&current_acceleration_data_tmp[0],
+                                      &current_acceleration_data_tmp[1],
+                                      &current_acceleration_data_tmp[2])) {
+        printf("Failed to read acceleration data");
+        break;
+      }
+      current_acceleration_data[0] = -current_acceleration_data_tmp[1];
+      current_acceleration_data[1] = -current_acceleration_data_tmp[0];
+      current_acceleration_data[2] = current_acceleration_data_tmp[2];
+      *new_accelerometer_samples += 1;
+    }    
   }
 }
 
